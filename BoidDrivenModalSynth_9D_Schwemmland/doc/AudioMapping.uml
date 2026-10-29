@@ -1,0 +1,52 @@
+@startuml
+title Boid Sound Engine - Audio Mapping (Signal Flow)
+
+skinparam componentStyle rectangle
+
+actor Swarm as S
+
+rectangle "SwarmOSCReceiver" as OSC
+rectangle "BoidAggregator" as AGG
+
+rectangle "ModalBank2D (per boid x modes)" as MOD
+rectangle "ModalFilter (resonant modes)" as RES
+
+rectangle "AmbiEncode2D (3rd order)" as ENC
+rectangle "AmbiDecode2D (stereo speakers)" as DEC
+
+rectangle "Audio Output Buffer" as OUT
+cloud "Control Signals (TRIGGER / FREQ / DENSITY)" as CTRL
+
+S --> OSC : OSC packets (position + velocity)
+
+OSC --> AGG : Boid struct array
+
+AGG --> AGG : spatialPos (R9 -> R3)
+AGG --> AGG : density + meanDist
+AGG --> AGG : wrapped velocity
+
+AGG --> CTRL : density / distance / motion metrics
+
+CTRL --> MOD : frequency mapping (baseline + density + radial)
+CTRL --> MOD : amplitude shaping (decay + brightness)
+CTRL --> MOD : excitation rate (trigger system)
+
+AGG --> MOD : exciteSource(i)
+
+MOD --> RES : modal synthesis (sum of resonators)
+RES --> MOD : boidOutputs[i]
+
+AGG --> ENC : normalizedPos (x,y,z)
+
+MOD --> ENC : audio per boid
+
+ENC --> ENC : azimuth = atan2(x,z)
+ENC --> ENC : distance attenuation
+ENC --> ENC : ambisonics (7ch)
+
+ENC --> DEC : ambisonic frame (7ch)
+
+DEC --> OUT : stereo signal
+OUT --> DAC : speakers
+
+@enduml

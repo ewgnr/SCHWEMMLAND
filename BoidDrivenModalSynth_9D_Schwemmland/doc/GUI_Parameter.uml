@@ -1,0 +1,477 @@
+@startuml
+title Adaptive Boid Sound Engine - Detailed GUI Parameter Flow
+
+skinparam backgroundColor #111111
+skinparam activity {
+    BackgroundColor #1e1e1e
+    BorderColor #888888
+    FontColor white
+}
+skinparam note {
+    BackgroundColor #2d2d2d
+    BorderColor #aaaaaa
+    FontColor white
+}
+skinparam partition {
+    BackgroundColor #181818
+    BorderColor #666666
+    FontColor white
+}
+
+start
+
+partition "TRIGGER / EXCITATION SYSTEM" {
+
+    :TRIGGER_MIX;
+
+    note right
+    Location:
+    audioOut()
+
+    Controls interpolation between:
+
+    adaptive:
+        meanDist / globalDist
+
+    absolute:
+        meanDist / ABSOLUTE_DISTANCE_SCALE
+
+    Formula:
+    relative =
+        mix * adaptive +
+        (1-mix) * absolute
+
+    Perceptual Effect:
+    - low = global swarm behavior
+    - high = local relational behavior
+    end note
+
+    :TRIGGER_MIN_RATE;
+
+    note right
+    Location:
+    audioOut()
+
+    Minimum excitation frequency
+    per boid.
+
+    Formula:
+    rate =
+        minRate +
+        dynamicContribution
+
+    Effect:
+    baseline activity floor
+    end note
+
+    :TRIGGER_MAX_RATE;
+
+    note right
+    Location:
+    audioOut()
+
+    Upper limit of excitation speed.
+
+    Also affects excitation energy:
+
+    exciteSource(
+        0.1 + triggerRate/maxRate
+    )
+
+    Effect:
+    denser / more chaotic triggering
+    end note
+
+    :TRIGGER_CURVE_EXPONENT;
+
+    note right
+    Location:
+    audioOut()
+
+    Shapes nonlinear trigger response.
+
+    Formula:
+    pow(compression, exponent)
+
+    <1 :
+        highly sensitive
+
+    >1 :
+        compressed response
+
+    Effect:
+    rhythmic sensitivity curve
+    end note
+
+    :TRIGGER_ACTIVITY_GAIN;
+
+    note right
+    Location:
+    audioOut()
+
+    Global multiplier
+    for all trigger rates.
+
+    Formula:
+    rate *= activityGain
+
+    Effect:
+    overall swarm excitation energy
+    end note
+
+    :ABSOLUTE_DISTANCE_SCALE;
+
+    note right
+    Location:
+    audioOut()
+
+    Normalizes absolute spatial distance.
+
+    Formula:
+    absolute =
+        meanDist / scale
+
+    Larger scale:
+        weaker distance influence
+
+    Smaller scale:
+        stronger trigger compression
+    end note
+}
+
+partition "SPATIAL ANALYSIS / AGGREGATOR" {
+
+    :SPATIAL_DENSITY_EXP_SCALE;
+
+    note right
+    Location:
+    computeDistancesAndDensity()
+
+    Formula:
+    density =
+        exp(-meanDist * scale)
+
+    Higher value:
+        sharper density falloff
+
+    Lower value:
+        smoother density field
+
+    Affects:
+    - frequency mapping
+    - trigger activity
+    end note
+
+    :SPATIAL NORMALIZATION;
+
+    note right
+
+    computeSpatialPositions()
+
+    targetCenter =
+        (minP + maxP)/2
+
+    targetScale =
+        1/maxExtent
+
+    smoothedCenter =
+        mix(old, target, alpha)
+
+    smoothedScale =
+        mix(old, target, alpha)
+
+    Creates stable normalized torus space.
+    end note
+}
+
+partition "FREQUENCY FIELD" {
+
+    :FREQ_MIN;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Lower spectral boundary.
+
+    Formula:
+    logMin = log(FREQ_MIN)
+
+    Defines bottom of logarithmic
+    pitch mapping.
+    end note
+
+    :FREQ_MAX;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Upper spectral boundary.
+
+    Formula:
+    logMax = log(FREQ_MAX)
+
+    Defines maximum reachable frequency.
+    end note
+
+    :FREQ_RADIAL_EXPONENT;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Formula:
+    t = pow(normDist, exponent)
+
+    Shapes radial mapping curve.
+
+    <1 :
+        center expanded
+
+    >1 :
+        edges emphasized
+
+    Effect:
+    spatial-to-pitch geometry
+    end note
+
+    :FREQ_TRANSPOSE;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Applied in normalized log space.
+
+    Formula:
+    transposeShift =
+        log(transpose)/(logMax-logMin)
+
+    Effect:
+    perceptually uniform transposition
+    end note
+
+    :FREQ_DENSITY_INFLUENCE;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Formula:
+    baseFreq *=
+        (1 + density * influence)
+
+    Dense swarms:
+        brighter spectrum
+
+    Sparse swarms:
+        darker spectrum
+    end note
+
+    :FREQ_SMOOTHING;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Formula:
+    smoothedFreq =
+        (1-smooth)*old +
+        smooth*new
+
+    High values:
+        stable pitch field
+
+    Low values:
+        reactive pitch motion
+    end note
+}
+
+partition "MODAL SYNTHESIS ENGINE" {
+
+    :MODE_FREQ_SPREAD;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Formula:
+    freq =
+        baseFreq *
+        (1 + spread * modeIndex)
+
+    Controls harmonic/modal spacing.
+
+    Higher:
+        more inharmonicity
+    end note
+
+    :MODE_BW_BASE;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Formula:
+    bw =
+        baseBW *
+        (1 + 0.3*modeIndex)
+
+    Controls modal damping width.
+
+    Higher:
+        noisier / broader resonances
+
+    Lower:
+        ringing resonances
+    end note
+
+    :MODE_AMP_DECAY;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Formula:
+    baseAmp =
+        ampBase /
+        (1 + decay*modeIndex)
+
+    Controls higher-mode attenuation.
+    end note
+
+    :MODE_BRIGHTNESS;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Formula:
+    brightShape =
+        pow(brightness, modeIndex*0.5)
+
+    Higher:
+        boosts upper modes
+
+    Lower:
+        darker timbre
+    end note
+
+    :MODE_AMP_BASE;
+
+    note right
+    Location:
+    computeModalParamsControl()
+
+    Global modal amplitude base.
+
+    Formula:
+    amp = ampBase *
+          tiltShape *
+          brightShape
+
+    Controls resonator energy.
+    end note
+}
+
+partition "SPATIAL RENDERING / AMBISONICS" {
+
+    :SPATIAL_WIDTH;
+
+    note right
+    Location:
+    audioOut()
+
+    Formula:
+    az =
+        tanh(az * width)*PI
+
+    Controls stereo/azimuth expansion.
+
+    Low:
+        centered image
+
+    High:
+        exaggerated spatial spread
+    end note
+
+    :SPATIAL_DISTANCE_MIN;
+
+    note right
+    Location:
+    audioOut()
+
+    Lower clamp for distance attenuation.
+
+    Prevents infinite gain
+    near listener.
+    end note
+
+    :SPATIAL_DISTANCE_MAX;
+
+    note right
+    Location:
+    audioOut()
+
+    Maximum spatial distance.
+
+    Controls attenuation ceiling.
+    end note
+
+    :SPATIAL_GAIN_EXP;
+
+    note right
+    Location:
+    audioOut()
+
+    Formula:
+    gain =
+        1/(1 + exp*dist)
+
+    Controls spatial attenuation slope.
+
+    Higher:
+        stronger depth damping
+    end note
+}
+
+partition "OUTPUT STAGE" {
+
+    :OUTPUT_TANH_DRIVE;
+
+    note right
+    Location:
+    audioOut()
+
+    Formula:
+    processed =
+        tanh(signal * drive)
+
+    Controls saturation intensity.
+
+    Low:
+        transparent
+
+    High:
+        compressed / distorted
+    end note
+
+    :OUTPUT_MASTER_GAIN;
+
+    note right
+    Location:
+    audioOut()
+
+    Final output multiplier.
+
+    Formula:
+    out = processed * gain
+
+    Final loudness control.
+    end note
+}
+
+stop
+
+@enduml

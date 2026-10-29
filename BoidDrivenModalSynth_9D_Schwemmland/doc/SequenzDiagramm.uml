@@ -1,0 +1,263 @@
+@startuml
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+
+title Adaptive Boid Sound Engine — Runtime Sequence
+
+actor OSC as osc
+participant "SwarmOSCReceiver" as receiver
+participant "ofApp" as app
+participant "AdaptiveBoidSoundEngine" as engine
+participant "BoidAggregator" as agg
+participant "SpatialFrame\n(Double Buffer)" as spatial
+participant "ModalParamsBuffer\n(Double Buffer)" as modalBuffer
+participant "ModalBank2D" as modal
+participant "Ambisonic\nEncode/Decode" as ambi
+participant "Audio Callback\n(ofSoundStream)" as audio
+
+' =========================================================
+' 1. OSC INPUT THREAD
+' =========================================================
+
+osc -> receiver : UDP message\n(/swarm/.../position)
+receiver -> receiver : parseMessage()
+receiver -> receiver : update Boid array
+
+note right of receiver
+Asynchronous network thread.
+
+Boid positions updated continuously
+without blocking audio rendering.
+end note
+
+' =========================================================
+' 2. MAIN UPDATE LOOP
+' =========================================================
+
+app -> receiver : update()
+receiver --> app : latest boids[]
+
+app -> engine : updateBoids(boids)
+
+' -------------------------
+' AGGREGATOR UPDATE
+' -------------------------
+
+engine -> agg : update(boids)
+
+agg -> agg : computeSpatialPositions()
+
+note right of agg
+Per-boid spatial embedding:
+- weighted subspaces
+- temporal smoothing
+- torus wrapping
+end note
+
+agg -> agg : compute adaptive normalization
+
+note right of agg
+Adaptive alpha:
+alpha = clamp(
+  0.005 + motion * 0.1,
+  0.005,
+  0.2
+)
+
+Stabilizes:
+- center
+- normalization scale
+end note
+
+agg -> agg : computeDistancesAndDensity()
+agg -> agg : computeGlobalMean()
+
+agg --> engine : wrappedPos[]
+agg --> engine : normalizedPos[]
+agg --> engine : wrappedVelocity[]
+agg --> engine : density[]
+agg --> engine : meanDistance[]
+
+' -------------------------
+' SPATIAL DOUBLE BUFFER
+' -------------------------
+
+engine -> spatial : write inactive SpatialFrame
+engine -> spatial : atomic swap(activeSpatial)
+
+note right of spatial
+Spatial snapshot contains:
+- wrapped positions
+- normalized positions
+- torus velocities
+- densities
+- mean distances
+- globalMeanDistance
+end note
+
+' -------------------------
+' MODAL PARAM COMPUTATION
+' -------------------------
+
+engine -> engine : computeModalParamsControl()
+
+note right of engine
+Per-boid modal synthesis mapping:
+
+Frequency:
+- radial distance
+- density modulation
+- transpose
+- smoothing
+
+Modal amplitudes:
+- motion energy
+- mode decay
+- brightness tilt
+
+Bandwidth:
+- per-mode widening
+end note
+
+engine -> modalBuffer : write workingBuffer
+engine -> modalBuffer : atomic swap(activeBuffer)
+
+note right of modalBuffer
+Lock-free parameter snapshot.
+
+Audio thread always reads
+stable immutable data.
+end note
+
+' =========================================================
+' 3. AUDIO CALLBACK THREAD
+' =========================================================
+
+audio -> engine : audioOut(buffer)
+
+engine -> spatial : load activeSpatial
+spatial --> engine : SpatialFrame snapshot
+
+engine -> modalBuffer : load activeBuffer
+modalBuffer --> engine : ModalParams snapshot
+
+' -------------------------
+' MODAL PARAM APPLICATION
+' -------------------------
+
+engine -> modal : applyModalParams()
+
+note right of modal
+Incremental parameter upload:
+only few boids updated
+per audio callback
+
+boidsPerBuffer = 2
+end note
+
+' -------------------------
+' TRIGGER COMPUTATION
+' -------------------------
+
+loop for each boid
+
+    engine -> engine : compute trigger rate
+
+    note right of engine
+    Trigger depends on:
+    - local mean distance
+    - global mean distance
+    - trigger mix
+    - compression curve
+    - activity gain
+    end note
+
+    engine -> engine : smooth trigger rate
+
+end
+
+' =========================================================
+' 4. SAMPLE RENDER LOOP
+' =========================================================
+
+loop each audio sample
+
+    loop each boid
+
+        engine -> engine : accumulate trigger phase
+
+        alt triggerAccumulator >= 1
+            engine -> modal : exciteSource()
+        end
+
+    end
+
+    ' -------------------------
+    ' MODAL SYNTHESIS
+    ' -------------------------
+
+    modal -> modal : playMulti()
+    modal --> engine : boidOutputs[]
+
+    ' -------------------------
+    ' AMBISONIC ENCODING
+    ' -------------------------
+
+    loop each boid
+
+        engine -> engine : compute azimuth
+        engine -> engine : compute distance gain
+
+        engine -> ambi : encode(sample, az, dist)
+        ambi --> engine : ambisonic contribution
+
+    end
+
+    engine -> engine : accumulate ambisonic frame
+
+    ' -------------------------
+    ' STEREO DECODE
+    ' -------------------------
+
+    loop speaker channels
+
+        engine -> ambi : decode(frame, speakerAz)
+        ambi --> engine : stereo sample
+
+        engine -> engine : tanh saturation
+        engine -> engine : master gain
+
+    end
+
+end
+
+engine -> audio : write stereo buffer
+
+' =========================================================
+' ARCHITECTURE NOTES
+' =========================================================
+
+note right of agg
+Aggregator responsibilities:
+- spatial embedding
+- normalization
+- torus consistency
+- density estimation
+- motion extraction
+end note
+
+note right of modal
+ModalBank2D is stateful:
+- resonator memory
+- excitation decay
+- dynamic parameter morphing
+end note
+
+note right of ambi
+Spatialization pipeline:
+Boid -> Ambisonics ->
+Stereo Decode
+end note
+
+@enduml

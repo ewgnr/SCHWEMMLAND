@@ -1,0 +1,61 @@
+@startuml
+title Boid Sound Engine - Runtime Sequence
+
+actor SwarmSource as OSC
+participant SwarmOSCReceiver as Receiver
+participant AdaptiveBoidSoundEngine as Engine
+participant BoidAggregator as Agg
+participant ModalBank2D as Modal
+participant AmbiEncode2D as Enc
+participant AmbiDecode2D as Dec
+participant AudioBuffer as Out
+
+== Frame update (game thread) ==
+OSC -> Receiver : OSC messages (/swarm/.../position, velocity)
+Receiver -> Receiver : parse + update Boid structs
+
+Engine -> Receiver : swarm.getBoids()
+Receiver --> Engine : std::vector<Boid>
+
+Engine -> Agg : update(boids)
+Agg -> Agg : computeSpatialPositions()
+Agg -> Agg : computeDistancesAndDensity()
+Agg -> Agg : computeGlobalMean()
+
+Engine -> Engine : computeModalParamsControl()
+Engine -> Modal : setParams(source, mode, freq/bw/amp)
+
+== Audio thread (per buffer) ==
+loop audioOut(buffer frames)
+
+    Engine -> Engine : load active ModalParamsBuffer
+    Engine -> Engine : compute trigger rates
+
+    loop per frame
+        Engine -> Engine : update triggerAccumulator
+
+        alt trigger fired
+            Engine -> Modal : exciteSource(boid i)
+        end
+
+        Modal -> Modal : playMulti()
+        Modal --> Engine : boidOutputs[]
+
+        loop per boid j
+            Engine -> Agg : getNormalizedPos(j)
+            Engine -> Enc : play(sample, azimuth, distance)
+            Enc --> Engine : ambiFrame[7]
+        end
+
+        Engine -> Dec : play(ambiFrame, speakerAzL)
+        Dec --> Engine : left sample
+
+        Engine -> Dec : play(ambiFrame, speakerAzR)
+        Dec --> Engine : right sample
+
+        Engine -> Out : buffer[L,R] = tanh(output)
+    end
+
+end loop
+
+@enduml

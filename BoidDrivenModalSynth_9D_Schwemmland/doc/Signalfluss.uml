@@ -1,0 +1,306 @@
+@startuml
+skinparam shadowing false
+skinparam roundcorner 12
+skinparam ArrowColor #444
+skinparam defaultTextAlignment center
+
+title Adaptive Boid Sound Engine — Detailed Signal Flow
+
+' =========================================================
+' INPUT LAYER
+' =========================================================
+
+rectangle "OSC INPUT\nSwarmOSCReceiver" as OSC
+
+rectangle "Boid State\nposition[9]\nvelocity[9]" as BOIDS
+
+OSC --> BOIDS : UDP / OSC messages
+
+note right of BOIDS
+
+Raw swarm data:
+- 9D positions
+- 9D velocities
+- asynchronous updates
+
+end note
+
+' =========================================================
+' SPATIAL AGGREGATION
+' =========================================================
+
+rectangle "Boid Aggregator" as AGG {
+
+  rectangle "Subspace Fusion\n(weighted 3D projections)" as SUB
+
+  rectangle "Temporal Smoothing\nspatialSmooth" as SMOOTH
+
+  rectangle "Torus Wrapping\n[-1,1] periodic domain" as TORUS
+
+  rectangle "Adaptive Normalization\ncenter + scale smoothing" as NORM
+
+  rectangle "Density Estimation\nmean pairwise distance" as DENS
+
+}
+
+BOIDS --> SUB
+
+SUB --> SMOOTH
+
+SMOOTH --> TORUS
+
+TORUS --> NORM
+
+NORM --> DENS
+
+note right of NORM
+
+Adaptive alpha:
+alpha = clamp(
+  0.005 + motion * 0.1,
+  0.005,
+  0.2
+)
+
+Stabilizes:
+- normalization center
+- normalization scale
+
+end note
+
+' =========================================================
+' DERIVED SPATIAL FEATURES
+' =========================================================
+
+rectangle "Derived Spatial Features" as DERIVED {
+
+  rectangle "Wrapped Position" as POS
+
+  rectangle "Normalized Position" as NPOS
+
+  rectangle "Wrapped Velocity" as VEL
+
+  rectangle "Density" as DENSITY
+
+  rectangle "Mean Distance" as MDIST
+
+  rectangle "Global Mean Distance" as GMDIST
+}
+
+DENS --> POS
+DENS --> NPOS
+DENS --> VEL
+DENS --> DENSITY
+DENS --> MDIST
+DENS --> GMDIST
+
+' =========================================================
+' SPATIAL SNAPSHOT BUFFER
+' =========================================================
+
+rectangle "SpatialFrame\n(Double Buffer Snapshot)" as SFRAME
+
+POS --> SFRAME
+NPOS --> SFRAME
+VEL --> SFRAME
+DENSITY --> SFRAME
+MDIST --> SFRAME
+GMDIST --> SFRAME
+
+note right of SFRAME
+
+Lock-free spatial snapshot:
+- immutable during audio callback
+- atomic pointer swap
+
+end note
+
+' =========================================================
+' CONTROL MAPPING
+' =========================================================
+
+rectangle "Control Mapping" as CTRL {
+
+  rectangle "Frequency Mapping\n(radial mapping + transpose)" as FMAP
+
+  rectangle "Density Modulation\nfrequency inflation" as DMOD
+
+  rectangle "Frequency Smoothing\nsmoothedFreq[]" as FSMOOTH
+
+  rectangle "Motion Analysis\nenergy from wrapped velocity" as MOTION
+
+  rectangle "Modal Structure Mapping\nspread / bw / amplitude tilt" as MMAP
+}
+
+NPOS --> FMAP
+DENSITY --> DMOD
+VEL --> MOTION
+MDIST --> FMAP
+
+FMAP --> DMOD
+DMOD --> FSMOOTH
+FSMOOTH --> MMAP
+MOTION --> MMAP
+
+note right of MMAP
+
+Modal parameters:
+- freq[m]
+- bw[m]
+- amp[m]
+
+Amplitude depends on:
+- motion energy
+- mode decay
+- brightness shaping
+
+end note
+
+' =========================================================
+' MODAL PARAMETER BUFFER
+' =========================================================
+
+rectangle "ModalParamsBuffer\n(Double Buffer Snapshot)" as MPARAM
+
+MMAP --> MPARAM
+
+note right of MPARAM
+
+Lock-free modal snapshot:
+- immutable during audio callback
+- atomic pointer swap
+
+end note
+
+' =========================================================
+' AUDIO THREAD
+' =========================================================
+
+rectangle "Audio Callback\n(audioOut)" as AUDIO
+
+SFRAME --> AUDIO
+MPARAM --> AUDIO
+
+' =========================================================
+' TRIGGER ENGINE
+' =========================================================
+
+rectangle "Trigger Engine" as TRIG {
+
+  rectangle "Relative Distance\nmeanDist / globalMean" as REL
+
+  rectangle "Absolute Distance\nmeanDist / scale" as ABS
+
+  rectangle "Compression Curve\npow(compression, exponent)" as CURVE
+
+  rectangle "Rate Smoothing\nsmoothedTriggerRate[]" as RSMOOTH
+
+  rectangle "Phase Accumulator\ntriggerAccumulator[]" as ACC
+}
+
+MDIST --> REL
+GMDIST --> REL
+MDIST --> ABS
+
+REL --> CURVE
+ABS --> CURVE
+
+CURVE --> RSMOOTH
+RSMOOTH --> ACC
+
+note right of TRIG
+
+Controls excitation density:
+- clustering = faster triggering
+- sparse motion = slower triggering
+
+end note
+
+' =========================================================
+' MODAL SYNTHESIS
+' =========================================================
+
+rectangle "ModalBank2D" as MODBANK {
+
+  rectangle "Incremental Parameter Upload\nboidsPerBuffer = 2" as UPLOAD
+
+  rectangle "Excitation Injection\nexciteSource()" as EXCITE
+
+  rectangle "Resonant Modal Filters\n8 modes / boid" as RES
+
+  rectangle "Per-Boid Output Sum" as BSUM
+}
+
+MPARAM --> UPLOAD
+ACC --> EXCITE
+
+UPLOAD --> RES
+EXCITE --> RES
+
+RES --> BSUM
+
+note right of RES
+
+Stateful resonator network:
+- modal decay
+- filter memory
+- excitation response
+- continuous morphing
+
+end note
+
+' =========================================================
+' SPATIALIZATION
+' =========================================================
+
+rectangle "Ambisonic Spatialization" as AMBI {
+
+  rectangle "Azimuth Mapping\natan2 + tanh width shaping" as AZ
+
+  rectangle "Distance Attenuation\n1 / (1 + gain * dist)" as ATTEN
+
+  rectangle "3rd Order Encoder" as ENC
+
+  rectangle "7-Channel Ambisonic Frame" as FRAME
+
+  rectangle "Stereo Decoder" as DEC
+}
+
+NPOS --> AZ
+NPOS --> ATTEN
+
+BSUM --> ENC
+AZ --> ENC
+ATTEN --> ENC
+
+ENC --> FRAME
+
+FRAME --> DEC
+
+' =========================================================
+' OUTPUT STAGE
+' =========================================================
+
+rectangle "Output Stage" as OUTSTAGE {
+
+  rectangle "Tanh Saturation\nOUTPUT_TANH_DRIVE" as TANH
+
+  rectangle "Master Gain\nOUTPUT_MASTER_GAIN" as GAIN
+}
+
+DEC --> TANH
+TANH --> GAIN
+
+rectangle "Stereo Output" as OUT
+
+GAIN --> OUT
+
+note right of OUTSTAGE
+
+Final mastering stage:
+- soft saturation
+- output level control
+
+end note
+
+@enduml

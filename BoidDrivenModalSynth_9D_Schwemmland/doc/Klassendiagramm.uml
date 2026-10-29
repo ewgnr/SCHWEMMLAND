@@ -1,0 +1,373 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+
+title Adaptive Boid Sound Engine — Class Diagram
+
+' =========================================================
+' CORE DATA STRUCTURES
+' =========================================================
+
+class Boid {
+  +int index
+  +float position[9]
+  +float velocity[9]
+}
+
+class Subspace {
+  +array<int,3> dims
+  +float weight
+}
+
+' =========================================================
+' INPUT LAYER
+' =========================================================
+
+class SwarmOSCReceiver {
+
+  -ofxOscReceiver receiver
+  -vector<Boid> boids
+  -int swarmIndex
+
+  +setup(port)
+  +update()
+
+  +getBoids()
+  +getSwarmIndex()
+
+  +drawDebug()
+  +printMinMax()
+
+  -handleMessage(msg)
+}
+
+' =========================================================
+' SPATIAL SNAPSHOT BUFFER
+' =========================================================
+
+class SpatialFrame {
+
+  +vector<glm::vec3> wrappedPos
+  +vector<glm::vec3> normalizedPos
+  +vector<glm::vec3> velocity
+
+  +vector<float> density
+  +vector<float> meanDistance
+
+  +double globalMeanDistance
+}
+
+' =========================================================
+' SPATIAL ABSTRACTION
+' =========================================================
+
+class BoidAggregator {
+
+  -vector<Subspace> subspaces
+
+  -vector<glm::vec3> spatialPos
+  -vector<glm::vec3> prevSpatialPos
+
+  -vector<float> densities
+  -vector<float> meanDistances
+
+  -glm::vec3 normCenter
+  -glm::vec3 smoothedCenter
+
+  -float normScale
+  -float smoothedScale
+  -float spatialSmooth
+
+  -double globalMeanDistance
+
+  +setup(maxBoids)
+
+  +update(boids)
+
+  +setSubspaces(s)
+
+  +getWrappedPos(i)
+
+  +getWrappedVelocity(i)
+
+  +getNormalizedWrappedPos(i)
+
+  +getDensity(i)
+
+  +getMeanDistance(i)
+
+  +getGlobalMeanDistance()
+
+  -computeSpatialPositions()
+
+  -computeDistancesAndDensity()
+
+  -computeGlobalMean()
+
+  -extractPos()
+
+  -normalizeWeights()
+}
+
+note right of BoidAggregator
+
+Responsibilities:
+- weighted subspace embedding
+- torus wrapping
+- adaptive normalization
+- density estimation
+- velocity extraction
+- spatial smoothing
+
+end note
+
+' =========================================================
+' MODAL SYNTHESIS
+' =========================================================
+
+class ModalFilter {
+
+  -double frq
+  -double bw
+  -double amp
+
+  +init(frq, bw, amp)
+
+  +setParams(frq, bw, amp)
+
+  +play(input)
+
+  +reset()
+}
+
+class ModalBank2D {
+
+  -vector<vector<ModalFilter>> nodes
+
+  -vector<vector<double>> excitation
+
+  -vector<vector<double>> output
+
+  -vector<vector<double>> weights
+
+  +setup(sources, modes, sampleRate)
+
+  +initRandom()
+
+  +setParams(source, mode, frq, bw, amp)
+
+  +excite(source, mode, value)
+
+  +exciteSource(source, value)
+
+  +playMulti(sums)
+
+  +getOutputs()
+}
+
+note right of ModalBank2D
+
+Stateful resonator bank:
+- excitation driven
+- modal decay
+- parameter morphing
+- filter memory retained
+
+end note
+
+' =========================================================
+' MODAL PARAMETER SNAPSHOT
+' =========================================================
+
+class ModalParams {
+
+  +vector<double> freq
+
+  +vector<double> bw
+
+  +vector<double> amp
+}
+
+class ModalParamsBuffer {
+
+  +vector<ModalParams> perBoid
+}
+
+' =========================================================
+' SPATIAL AUDIO
+' =========================================================
+
+class AmbiEncode2D {
+
+  +play(input, azimuth, distance)
+}
+
+class AmbiDecode2D {
+
+  +play(ambiFrame, speakerAz)
+}
+
+note right of AmbiEncode2D
+
+Third-order ambisonic encoding:
+- azimuth mapping
+- distance attenuation
+- spatial energy projection
+
+end note
+
+' =========================================================
+' CONTROL / AUDIO ENGINE
+' =========================================================
+
+class AdaptiveBoidSoundEngine {
+
+  -int N
+
+  -int Nmax
+
+  -int modalUpdateOffset
+
+  -vector<Boid> boids
+
+  -vector<double> boidOutputs
+
+  -vector<double> smoothedFreq
+
+  -vector<double> densities
+
+  -vector<double> triggerAccumulator
+
+  -vector<double> triggerRate
+
+  -vector<double> smoothedTriggerRate
+
+  -BoidAggregator aggregator
+
+  -ModalBank2D modalBank2D
+
+  -AmbiEncode2D ambiEnc
+
+  -AmbiDecode2D ambiDec
+
+  -array<double,2> speakerAz
+
+  ' -------------------------
+  ' MODAL DOUBLE BUFFER
+  ' -------------------------
+
+  -ModalParamsBuffer bufferA
+
+  -ModalParamsBuffer bufferB
+
+  -ModalParamsBuffer workingBuffer
+
+  -atomic<ModalParamsBuffer*> activeBuffer
+
+  ' -------------------------
+  ' SPATIAL DOUBLE BUFFER
+  ' -------------------------
+
+  -SpatialFrame spatialA
+
+  -SpatialFrame spatialB
+
+  -atomic<SpatialFrame*> activeSpatial
+
+  ' -------------------------
+  ' GLOBAL METRICS
+  ' -------------------------
+
+  -atomic<double> globalMeanDistance
+
+  +setup(maxBoids)
+
+  +updateBoids(boids)
+
+  +audioOut(buffer)
+
+  +getBoids()
+
+  +getBoidPosition(i)
+
+  -computeModalParamsControl()
+
+  -applyModalParams()
+
+  -allocateBuffers()
+}
+
+note right of AdaptiveBoidSoundEngine
+
+Core responsibilities:
+
+CONTROL DOMAIN
+- frequency mapping
+- modal parameter generation
+- spatial analysis
+
+REALTIME AUDIO DOMAIN
+- trigger synthesis
+- resonator excitation
+- ambisonic rendering
+- stereo decode
+
+THREADING
+- lock-free buffer swaps
+- immutable snapshots
+- incremental modal updates
+
+end note
+
+' =========================================================
+' APPLICATION LAYER
+' =========================================================
+
+class ofApp {
+
+  -SwarmOSCReceiver swarm
+
+  -AdaptiveBoidSoundEngine engine
+
+  -ofSoundStream soundStream
+
+  +setup()
+
+  +update()
+
+  +draw()
+
+  +onSliderEvent()
+}
+
+' =========================================================
+' RELATIONSHIPS
+' =========================================================
+
+ofApp --> SwarmOSCReceiver
+
+ofApp --> AdaptiveBoidSoundEngine
+
+SwarmOSCReceiver --> Boid
+
+AdaptiveBoidSoundEngine --> BoidAggregator
+
+AdaptiveBoidSoundEngine --> ModalBank2D
+
+AdaptiveBoidSoundEngine --> AmbiEncode2D
+
+AdaptiveBoidSoundEngine --> AmbiDecode2D
+
+AdaptiveBoidSoundEngine --> ModalParamsBuffer
+
+AdaptiveBoidSoundEngine --> SpatialFrame
+
+AdaptiveBoidSoundEngine --> Boid
+
+BoidAggregator --> Subspace
+
+ModalBank2D --> ModalFilter
+
+ModalParamsBuffer --> ModalParams
+
+@enduml
